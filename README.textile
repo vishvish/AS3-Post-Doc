@@ -6,14 +6,16 @@ h3. Use it like a ninja
 
 I like to use this recursively, as suggested on the as3dac site. I have implemented this into my ZSH shell with a plugin. It looks like this:
 
-@function as3postdoc-recursive {
+<code>
+function as3postdoc-recursive {
 	find $@ -name "*.as" | while read as3file
 	do
 	  as3postdoc -a "$USER" -e "$EMAIL" -c "$as3file" -o "$as3file"
 	done	
 }
 
-alias as3postdoc="as3postdoc-recursive"@
+alias as3postdoc="as3postdoc-recursive"
+</code>
 
 To run, @cd@ into the root directory of the Actionscript, and:
 
