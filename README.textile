@@ -20,3 +20,5 @@ alias as3postdoc="as3postdoc-recursive"
 To run, @cd@ into the root directory of the Actionscript, and:
 
 @as3postdoc .@
+
+h3. BTW. Put this script into your $PATH.
