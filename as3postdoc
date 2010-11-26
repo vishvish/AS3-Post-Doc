@@ -1,0 +1,632 @@
+#!/usr/bin/env perl
+=begin
+
+ AS3 Post-Doc, forked from:
+
+ AS3Dac - Auto Commenting for AS3.0 Classes and Interfaces
+ http://code.google.com/p/as3dac
+
+ Author: Jason Milkins / http://mentalaxis.com
+ Copyright (C) 2009  Jason Milkins / mentalaxis.com
+
+ Modified and upgraded by Vish Vishvanath / http://www.vishvish.com/
+ Modifications Copyright (C) 2010 Vish Vishvanath / vishvish.com 
+
+ This program is free software; you can redistribute it and/or
+ modify it under the terms of the GNU General Public License
+ as published by the Free Software Foundation; either version 2
+ of the License, or (at your option) any later version.
+ 
+ This program is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+ 
+ You should have received a copy of the GNU General Public License
+ along with this program; if not, write to the Free Software
+ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+=cut
+
+use utf8;
+use Getopt::Std;
+# For determining file creation/modification dates
+use File::stat;
+use Time::localtime;
+use Time::Piece;
+
+# Manage command line options
+%option=();
+$Getopt::Std::STANDARD_HELP_VERSION = 'true';
+getopts("pv:tT:a:e:c:o:",\%option);
+
+# Create divider for console messages
+$divider = ('=' x 98);
+
+#Init
+$TODO = "TODO";
+$OPEN_COMMENT  = "/**";
+$CLOSE_COMMENT = " */";
+$COMMENT_START = " *\t";
+$tab = "\t";
+$linebreak = "\n";
+$date_string = "";
+
+# Get input output settings
+$inFile = $option{c} or usageMessage();
+$outFile = $option{o};
+
+# Determine Author and Email String;
+if ($option{a} && $option{e}) {
+	$inAuthor = $option{a};
+	$inEmail = $option{e};
+} else {
+	if ($option{a}) {
+		$inAuthor = $option{a};
+	}
+	
+	if ($option{e}) {
+		$inEmail = $option{e};
+	}
+} 
+
+# is a class (0 = interface)
+$isClass = 1;
+
+# Init loop vars...
+$braceCount        = 0;
+$blockCommentCount = 0;
+
+# Run main loop using the first parameter passed at the command line...
+$documented = docFile($inFile);
+
+# output the $documented version to the outFile $ARGV[1])
+if($option{o}) {
+	outputDoc( $outFile, $documented );
+} else {
+	print STDOUT $documented;
+}
+=begin
+ sub: outputDoc
+=cut
+sub outputDoc {
+	my ( $fileName, $outputText ) = @_;
+	open( OUTFILE, "> $fileName" )
+	  or die "File Error: $fileName write error: $!\n";
+	select OUTFILE;
+	print $outputText;
+	close OUTFILE;
+}
+
+
+=begin
+ sub: docFile
+=cut
+sub docFile {
+	my ($fileName) = @_;
+
+	#init Output
+	$output = "";
+
+	#init prevDone;
+	$previous = 0;
+
+	# open file...
+	open SOURCE, "< $fileName"
+	  or die "File Error: $fileName cannot be read: $!\n";
+	
+	# Get datetime of file creation
+	$date_string = localtime((stat $fileName)[9])->strftime("%d %B %Y");
+	 
+	# Read the file into an array of lines...
+	@lines = <SOURCE>;
+	close SOURCE;
+	for my $line (@lines) {
+		if ( $previous != 1 ) {
+			if ( $line =~ m!\*/! ) {
+				$previous = 1;
+			} else {
+				$previous = 0;
+			}
+
+			# Update block comment count
+			$openBlockComment = $line =~ m!/\*!;
+			$blockCommentCount += $openBlockComment;
+			$closeBlockComment = $line =~ m!\*/!;
+			$blockCommentCount -= $closeBlockComment;
+
+			# If we are not inside a block comment check/document the line...
+			if ( $blockCommentCount == 0 ) {
+
+				# Update brace count
+				$openBrace = $line =~ m/{/;
+				$braceCount += $openBrace;
+				$closeBrace = $line =~ m/}/;
+				$braceCount -= $closeBrace;
+
+				# determine the documentation for the current line, and return it.
+				$doc = docline( $line, $braceCount );
+
+				# append documentation to output
+				$output .= $doc;
+			}
+		} else {
+			$previous = 0;
+		}
+		$output .= $line;
+	}
+	#return output
+	return $output;
+}
+
+
+=begin
+  sub: docline
+  Process a line and build documentation for class, interface and members.
+=cut
+sub docline {
+	my ( $inLine, $braceCount ) = @_;
+
+	$lineDoc      = "";
+	$currentBrace = $inLine =~ m/{/;
+
+	# Determine TODO marking...
+	if ($option{t}) {
+		$TODO = ($option{T} ne "") ? $option{T} : "TODO";
+	}
+	
+	$lineDoc = checkClass( $inLine, $braceCount, $currentBrace, $inAuthor, $inEmail, $option{v} );
+	if ( $lineDoc ne "" ) { return $lineDoc; }
+	
+	$lineDoc = checkClassProperty( $inLine, $braceCount, $currentBrace, $option{p} );
+	if ( $lineDoc ne "" ) { return $lineDoc; }		
+	
+	$lineDoc = checkClassMethod( $inLine, $braceCount, $currentBrace, $option{p} );
+	if ( $lineDoc ne "" ) { return $lineDoc; }
+	
+	$lineDoc = checkInterface( $inLine, $braceCount, $currentBrace, $inAuthor, $inEmail, $option{v} );
+	if ( $lineDoc ne "" ) { return $lineDoc; }
+	
+	$lineDoc = checkInterfaceMethod( $inLine, $braceCount, $currentBrace );
+	if ( $lineDoc ne "" ) { return $lineDoc; }
+	
+	$lineDoc = checkMetaTags( $inLine, $braceCount, $currentBrace );
+	if ( $lineDoc ne "" ) { return $lineDoc; }
+}
+
+=begin
+ sub: HELP_MESSAGE
+
+ Display the usage message when incorrect options 
+ are passed, or when option -h is used.
+=cut
+sub HELP_MESSAGE {	
+print STDOUT <<"EOF";
+ $divider
+   AS3Dac creates documentation comment stubs in AS3.0 class files.
+
+   Example:
+      as3dac -c path/MyClass.as -o path/MyOutputClass.as -a "Author Name" -e "email\@domain.com" -v "1.0"
+
+   Usage:
+      as3dac [options]
+
+   Options:  
+      -c filename            : AS3.0 Class file to auto comment
+
+      -o filename            : Output to another file - default output to terminal
+
+      -p                     : Only add doc comment stubs to public members
+
+      -a "Author Name"       : Author name (in quotes if it contains spaces)
+
+      -e "email\@domain.org"  : Author email
+
+      -t                     : Add TODO notes to comment stubs
+
+      -T "message"           : If -t is used, customise TODO string                             
+
+      -v "version"           : Version string
+
+      --help                 : this message
+
+ $divider
+   All the usual disclaimers apply - use at your own risk
+   http://code.google.com/p/as3dac for more info
+ $divider
+   Licenced under GNU General Public License, version 2
+EOF
+
+exit;
+}
+
+=begin
+ sub: VERSION_MESSAGE
+
+ Standard version message
+=cut
+sub VERSION_MESSAGE {
+print STDOUT <<"EOF";
+ $divider
+   ActionScript 3.0 Documentation Auto-Commenting : AS3Dac v1.0   
+EOF
+}
+
+=begin
+ sub: usageMessage
+
+ Standard version message
+
+=cut
+sub usageMessage {
+	VERSION_MESSAGE();
+	HELP_MESSAGE();
+}
+
+=begin
+ sub: printTimeStamp
+=cut
+sub printTimeStamp {
+	($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst)=localtime(time);
+	printf STDOUT "%4d-%02d-%02d %02d:%02d:%02d",$year+1900,$mon+1,$mday,$hour,$min,$sec;		
+}
+
+=begin
+  sub: checkClass
+=cut
+sub checkClass { 
+	my ( $inLine, $braceCount, $currentBrace, $inAuthor, $inEmail, $inVersion ) = @_;
+
+	# CHECK FOR CLASS...
+	if (    $inLine =~ m/class/
+		 && $inLine !~ m!//.*class!
+		 && ( $braceCount - $currentBrace ) < 2 )
+	{
+		
+		$isClass = 1;
+		# Grab indent
+		$inLine =~ m/^([\s]*)[^\s]/s;
+		$docIndent = $1;
+		
+		$blankComment = $docIndent . $COMMENT_START;
+
+		# strip open brace
+		$inLine =~ s/{//;
+
+		# Get the className
+		# match [words or the "."] after "class "
+		$inLine =~ m/class ([\w.]*)/;
+		$className = $1;
+
+		# Strip whitespace
+		$inLine =~ s/\s//g;
+
+		# Create the doc...
+		$lineDoc = $docIndent . $OPEN_COMMENT . $linebreak;
+		$lineDoc .= $docIndent . $COMMENT_START . $className . " " . $TODO . $linebreak;
+		$lineDoc .= $blankComment . $linebreak;
+		$lineDoc .= $blankComment . '@example ' . $TODO . $linebreak;
+		$lineDoc .= $blankComment . $linebreak;
+		$lineDoc .= $blankComment . '@exampleText ' . $TODO . $linebreak;
+		$lineDoc .= $blankComment . $linebreak;
+		
+		if($inAuthor) {
+			$lineDoc .= $blankComment . '@author ' . $tab . $inAuthor . $linebreak;
+			$lineDoc .= $blankComment . '@email ' . $tab . $tab.  $inEmail . $linebreak;
+			$lineDoc .= $blankComment . '@since ' . $tab . $tab . $date_string . $linebreak;
+		}
+
+		if($inVersion) {
+			$lineDoc .= $blankComment . '@version ' . $inVersion . $linebreak;
+		}
+
+		# End the class comment.
+		$lineDoc .= $docIndent . $CLOSE_COMMENT . $linebreak;
+		return $lineDoc;
+	} 
+}
+=begin
+ sub: checkClassProperty
+=cut
+sub checkClassProperty { 
+	my ( $inLine, $braceCount, $currentBrace, $onlyPublic ) = @_;
+	
+	#CHECK FOR CLASS PROPERTIES...
+	if (    $inLine =~ m/var/
+		 && $inLine !~ m!//.*var!
+		 && ( $braceCount - $currentBrace ) < 3
+		 && $isClass == 1 )
+	{
+		
+		# Calculate indent
+		$inLine =~ m/^([\s]*)[^\s]/s;
+		$docIndent = $1;
+
+		# remove ;
+		$inLine =~ s/;//;
+
+		# check member access attributes
+		$isPrivate = $inLine =~ m/private.*var/g;
+		$isPublic  = $inLine =~ m/public.*var/g;
+		$isStatic  = $inLine =~ m/static.*var/g;
+		
+		if(($isPublic && $onlyPublic) || not $onlyPublic)
+		{	
+			
+			$inLine =~ m/^.*var(.*)/;
+			$varString = $1;
+			
+			$blankComment = $docIndent . $COMMENT_START;
+	
+			# strip whitepace
+			
+			$varString =~ s/\s//g;
+	
+			# grab the varName
+			@varName = split( m/:/, $varString );
+			
+			( $varName, $dataType ) = @varName;
+			
+			$varName =~ s/=.*//g;
+
+			$lineDoc = $docIndent . $OPEN_COMMENT . $linebreak;
+			$lineDoc .= $blankComment  . $varName . " " . $TODO . $linebreak;
+			$lineDoc .= $docIndent . $CLOSE_COMMENT . $linebreak;			
+			
+			return $lineDoc;
+		}
+	}
+}
+=begin
+  sub: checkClassMethod
+=cut
+sub checkClassMethod { 
+	my ( $inLine, $braceCount, $currentBrace, $onlyPublic ) = @_;
+	
+	if (    $inLine =~ m/function/
+		 && $inLine !~ m!//.*function!
+		 && ( $braceCount - $currentBrace ) < 3
+		 && $isClass == 1 )
+	{
+		
+		# Calculate indent
+		$inLine =~ m/^([\s]*)[^\s]/s;
+		$docIndent = $1;
+
+		# check member access attributes
+		$isPrivate = $inLine =~ m/private.*function.*\(/g;
+		$isPublic  = $inLine =~ m/public.*function.*\(/g;
+		$isStatic  = $inLine =~ m/static.*function.*\(/g;
+		$isGetter  = $inLine =~ m/function get (.*)\(/;
+		$getter    = $1;
+		$isSetter  = $inLine =~ m/function set .*/;
+
+		if(($isPublic && $onlyPublic) || not $onlyPublic)
+		{	
+			$inLine =~ s/{//g;
+			
+			$blankComment = $docIndent . $COMMENT_START;
+			
+			# strip whitespace
+			$inLine =~ s/\s//g;
+
+			# extract return type
+			$inLine =~ m/^.*?(\w+)[.!?]?\s*$/;
+			$returnType = $1; 
+	
+			# extract Method Name
+			$inLine =~ m/^.*function(.*)\(/;
+			$methodName = $1;
+			
+			# if( $methodName == $className )
+			# {
+			# 	$methodName .= " Constructor";
+			# }
+	
+			# extract parameters string
+			$inLine =~ m/^.*\((.*)\)/;
+			$parameters = $1;
+	
+			# create parameters documentation stub
+			$parametersList = "";
+			@params = split ",", $parameters;
+			for $param (@params) {    # any LIST expression
+				@farg = split ":", $param;
+				$parametersList .=
+				  $blankComment . '@param ' . $farg[0] . " " . $linebreak;
+			}
+	
+			# is there a return
+			$matchReturn = $inLine =~ m/:/;
+			
+
+			if($isSetter) {
+				
+				$lineDoc = <<"EOF";
+$docIndent/**
+$docIndent * \@private
+$docIndent */
+EOF
+				return $lineDoc;
+				
+			}
+			
+			if($isGetter) {
+				$lineDoc = <<"EOF";
+$docIndent/**
+$docIndent * $getter $TODO
+$docIndent */
+EOF
+				return $lineDoc;
+			}
+
+			# Method comments begin...
+			$lineDoc = $docIndent . $OPEN_COMMENT . $linebreak;
+			$lineDoc .= $blankComment . $methodName . " " . $TODO . $linebreak;
+	
+			if ( $parametersList ne "" ) {
+				$lineDoc .=  
+					$blankComment . $linebreak . $parametersList;
+			}
+	
+			if ($matchReturn) {
+				$lineDoc .= $blankComment . $linebreak;
+				$lineDoc .= $blankComment . '@return ' . $returnType . $tab . $linebreak;
+			}
+
+			$lineDoc .= $docIndent . $CLOSE_COMMENT . $linebreak;
+						
+			return $lineDoc;
+		}
+	}
+}
+=begin
+  sub: checkInterface
+=cut
+sub checkInterface {
+	my ( $inLine, $braceCount, $currentBrace, $inAuthor, $inEmail, $inVersion ) = @_;
+
+	if (    $inLine =~ m/interface/
+		 && $inLine !~ m!//.*interface!
+		 && ( $braceCount - $currentBrace ) < 2 )
+	{
+		$isClass = 0;
+
+		# Grab indent
+		$inLine =~ m/^([\s]*)[^\s]/s;
+		$docIndent = $1;
+
+		$blankComment = $docIndent . $COMMENT_START;
+
+		# strip open brace
+		$inLine =~ s/{//;
+
+		# Get the interfaceName
+		# match [words or the "."] after "interface "
+		$inLine =~ m/interface ([\w.]*)/;
+		$interfaceName = $1;
+
+		# Strip whitespace
+		$inLine =~ s/\s//g;
+
+		# Create the doc...
+		$lineDoc = $docIndent . $OPEN_COMMENT . $linebreak;
+		$lineDoc .= $docIndent . $COMMENT_START . $interfaceName . " " . $TODO . $linebreak;
+		$lineDoc .= $blankComment . $linebreak;
+		$lineDoc .= $blankComment . '@example ' . $TODO . $linebreak;
+		$lineDoc .= $blankComment . $linebreak;
+		$lineDoc .= $blankComment . '@exampleText ' . $TODO . $linebreak;
+		$lineDoc .= $blankComment . $linebreak;
+		
+		if($inAuthor) {
+			$lineDoc .= $blankComment . '@author ' . $tab . $inAuthor . $linebreak;
+			$lineDoc .= $blankComment . '@email ' . $tab . $tab.  $inEmail . $linebreak;
+			$lineDoc .= $blankComment . '@since ' . $tab . $tab . $date_string . $linebreak;
+		}
+		
+		if($inVersion) {
+			$lineDoc .= $blankComment . '@version ' . $inVersion . $linebreak;
+		}
+
+		# End the interface comment.
+		$lineDoc .= $docIndent . $CLOSE_COMMENT . $linebreak;
+		
+		return $lineDoc;
+	}
+}
+=begin
+  sub: checkInterfaceMethod
+=cut
+sub checkInterfaceMethod {
+	my ( $inLine, $braceCount, $currentBrace ) = @_;
+		
+	if (    $inLine =~ m/function/
+		 && $inLine !~ m!//.*function!
+		 && ( $braceCount - $currentBrace ) < 3
+		 && $isClass == 0 )
+	{
+		# Calculate indent
+		$inLine =~ m/^([\s]*)[^\s]/s;
+		$docIndent = $1;
+
+		$inLine =~ s/{//g;
+		
+		$blankComment = $docIndent . $COMMENT_START;
+		
+		# strip whitespace
+		$inLine =~ s/\s//g;
+
+		# extract Method Name
+		$inLine =~ m/^.*function(.*)\(/;
+		$methodName = $1;
+
+		# extract parameters string
+		$inLine =~ m/^.*\((.*)\)/;
+		$parameters = $1;
+		
+		# is there a return
+		$matchReturn = $inLine =~ m/:/;
+
+		# create parameters documentation stub
+		$parametersList = "";
+		@params = split ",", $parameters;
+		for $param (@params) {    # any LIST expression
+			@farg = split ":", $param;
+			$parametersList .=
+			  $blankComment . '@param ' . $farg[0] . " - " . $TODO . $linebreak;
+		}
+
+		# Method comments begin...
+		$lineDoc = $docIndent . $OPEN_COMMENT . $linebreak;
+		$lineDoc .= $blankComment . $methodName . " " . $TODO . $linebreak;
+
+		if ( $parametersList ne "" ) {
+			$lineDoc .=  
+				$blankComment . $linebreak
+			  . $parametersList;
+		}
+
+		if ($matchReturn) {
+			$lineDoc .= $blankComment . $linebreak;
+			$lineDoc .= $blankComment . '@return ' . $TODO . $linebreak;
+		}
+		$lineDoc .= $docIndent . $CLOSE_COMMENT . $linebreak;
+		return $lineDoc;
+	}
+}
+=begin
+  sub: checkMetaTags
+=cut
+sub checkMetaTags {
+	my ( $inLine, $braceCount, $currentBrace ) = @_;
+
+	# Calculate indent
+	$inLine =~ m/^([\s]*)\[/s;
+	$docIndent = $1;
+
+	if ( $inLine =~ m/^\s*\[Effect/  ) {
+		$lineDoc = <<"EOF";
+$docIndent/**
+$docIndent * Effect $TODO
+$docIndent */
+EOF
+		return $lineDoc;
+	}
+	
+	if ( $inLine =~ m/^\s*\[Event/ ) {
+		$lineDoc = <<"EOF";
+$docIndent/**
+$docIndent * Event $TODO
+$docIndent */
+EOF
+		return $lineDoc;
+	}
+	
+	if ( $inLine =~ m/^\s*\[Style/ ) {
+		$lineDoc = <<"EOF";
+$docIndent/**
+$docIndent * Style $TODO
+$docIndent */
+EOF
+		return $lineDoc;
+	}
+}

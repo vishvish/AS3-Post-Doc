@@ -1,0 +1,20 @@
+h2. Forked from "as3dac":http://code.google.com/p/as3dac/
+
+as3dac was a cool project, but it's not had any love in a while, and it wasn't quite providing the exact formatting I wanted. So I've updated it here.
+
+h3.
+
+I like to use this recursively, as suggested on the as3dac site. I have implemented this into my ZSH shell with a plugin. It looks like this:
+
+@function as3postdoc-recursive {
+	find $@ -name "*.as" | while read as3file
+	do
+	  as3postdoc -a "$USER" -e "$EMAIL" -c "$as3file" -o "$as3file"
+	done	
+}
+
+alias as3postdoc="as3postdoc-recursive"@
+
+To run, @cd@ into the root directory of the Actionscript, and:
+
+@as3postdoc .@
