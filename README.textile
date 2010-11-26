@@ -2,7 +2,7 @@ h2. Forked from "as3dac":http://code.google.com/p/as3dac/
 
 as3dac was a cool project, but it's not had any love in a while, and it wasn't quite providing the exact formatting I wanted. So I've updated it here.
 
-h3.
+h3. Use it like a ninja
 
 I like to use this recursively, as suggested on the as3dac site. I have implemented this into my ZSH shell with a plugin. It looks like this:
 
